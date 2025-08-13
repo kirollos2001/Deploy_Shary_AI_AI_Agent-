@@ -7,10 +7,10 @@ on:
 
 env:
   REGION: us-central1
-  SERVICE_NAME: ai-shary
-  REPO: ai-shary                   # اسم الصورة داخل الـ repo
-  ARTIFACT_REPO: docker            # اسم Repository في Artifact Registry (اللي أنشأته)
-  PORT: 5000                       # غيّرها لو تطبيقك بيسمع على بورت تاني
+  SERVICE_NAME: ai-shary                 # اسم خدمة Cloud Run
+  REPO: ai-shary                         # اسم الصورة داخل الـ repo
+  ARTIFACT_REPO: docker                  # اسم Repository في Artifact Registry
+  PORT: 5000                             # غيّرها لو تطبيقك بيسمع على بورت تاني
 
 permissions:
   contents: read
@@ -23,13 +23,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # تشخيص سريع: هل السيكرتس متاحة؟
+      # 1) تشخيص سريع لوجود السيكرتس (بدون طباعة القيم)
       - name: Debug secrets presence (safe)
         run: |
           echo "Has GCP_SERVICE_ACCOUNT_KEY? $([ -n '${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}' ] && echo YES || echo NO)"
-          echo "Has GCP_PROJECT_ID? $([ -n '${{ secrets.GCP_PROJECT_ID }}' ] && echo YES || echo NO)"
+          echo "Has GCP_PROJECT_ID?         $([ -n '${{ secrets.GCP_PROJECT_ID }}' ] && echo YES || echo NO)"
+          echo "Has GEMINI_API_KEY?         $([ -n '${{ secrets.GEMINI_API_KEY }}' ] && echo YES || echo NO)"
 
-      # PROJECT_ID: من السيكرت أو من JSON
+      # 2) تحديد PROJECT_ID: من السيكرت المباشر أو من JSON المفتاح
       - name: Resolve PROJECT_ID
         run: |
           if [ -n "${{ secrets.GCP_PROJECT_ID }}" ]; then
@@ -38,38 +39,49 @@ jobs:
             echo "PROJECT_ID=${{ fromJSON(secrets.GCP_SERVICE_ACCOUNT_KEY).project_id }}" >> $GITHUB_ENV
           fi
           echo "PORT=${{ env.PORT }}" >> $GITHUB_ENV
+          echo "Resolved PROJECT_ID set."
 
-      # المصادقة بمفتاح الخدمة
+      # 3) مصادقة Google Cloud بمفتاح الخدمة
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
 
+      # 4) إعداد gcloud على نفس المشروع
       - name: Set up gcloud SDK
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ env.PROJECT_ID }}
 
-      # تأكيد الأوث والمشروع والـ repo
-      - name: Verify auth/project and repo existence
+      # 5) من أنا؟ (SA email المستخدم من السيكرت) + حالة الأوث والمشروع
+      - name: Who am I (service account) + gcloud state
         run: |
+          echo "SA_EMAIL=${{ fromJSON(secrets.GCP_SERVICE_ACCOUNT_KEY).client_email }}"
           echo "== gcloud auth list =="; gcloud auth list
           echo "== gcloud config list =="; gcloud config list
+          echo "Resolved PROJECT_ID=${{ env.PROJECT_ID }}"
+
+      # 6) تأكيد وجود الـ repo + طباعة IAM bindings للريبو (تشخيص صلاحيات الـ push)
+      - name: Verify Artifact Registry repo and IAM (diagnostics)
+        run: |
           echo "Checking Artifact Registry '${{ env.ARTIFACT_REPO }}' in '${{ env.REGION }}'..."
           if ! gcloud artifacts repositories describe "${{ env.ARTIFACT_REPO }}" --location="${{ env.REGION }}" >/dev/null 2>&1; then
             echo "::error::Artifact Registry repository '${{ env.ARTIFACT_REPO }}' not found in region '${{ env.REGION }}'."
-            echo "Create it in Console: Artifact Registry → Create repo (Docker, us-central1, name=${{ env.ARTIFACT_REPO }})."
             exit 1
           fi
+          echo "== Repo IAM bindings (role -> members) =="
+          gcloud artifacts repositories get-iam-policy "${{ env.ARTIFACT_REPO }}" \
+            --location="${{ env.REGION }}" \
+            --format='table(bindings.role, bindings.members)' || true
 
-      # تسجيل الدخول إلى Artifact Registry
+      # 7) تسجيل دخول Docker إلى Artifact Registry
       - name: Docker login to Artifact Registry
         run: |
           gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
           TOKEN="$(gcloud auth print-access-token)"
           echo "$TOKEN" | docker login -u oauth2accesstoken --password-stdin "${REGION}-docker.pkg.dev"
 
-      # بناء الصورة (لوجز تفصيلية)
+      # 8) بناء الصورة (لوجز تفصيلية)
       - name: Build image (verbose)
         env:
           IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.REPO }}:${{ github.sha }}
@@ -77,14 +89,25 @@ jobs:
           echo "Building IMAGE=$IMAGE"
           docker build --progress=plain -t "$IMAGE" .
 
-      # دفع الصورة
-      - name: Push image
+      # 9) دفع الصورة (لو فشل يطبع تشخيص واضح)
+      - name: Push image (with diagnostics)
         env:
           IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.REPO }}:${{ github.sha }}
         run: |
-          docker push "$IMAGE"
+          set -e
+          if ! docker push "$IMAGE"; then
+            echo "::error::Docker push failed (likely IAM)."
+            echo "== Who am I? =="; gcloud auth list
+            echo "== Repo IAM =="
+            gcloud artifacts repositories get-iam-policy "${ARTIFACT_REPO}" \
+              --location="${REGION}" \
+              --format='table(bindings.role, bindings.members)' || true
+            echo "If you see no 'artifactregistry.writer' for your SA, add:"
+            echo "gcloud artifacts repositories add-iam-policy-binding ${ARTIFACT_REPO} --location=${REGION} --member=serviceAccount:${{ fromJSON(secrets.GCP_SERVICE_ACCOUNT_KEY).client_email }} --role=roles/artifactregistry.writer"
+            exit 1
+          fi
 
-      # نشر على Cloud Run
+      # 10) نشر على Cloud Run
       - name: Deploy to Cloud Run
         env:
           IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.REPO }}:${{ github.sha }}
@@ -101,7 +124,7 @@ jobs:
             --concurrency 80 \
             --set-env-vars PORT=${PORT},GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
 
-      # اطبع عنوان الخدمة
+      # 11) اطبع عنوان الخدمة بعد النشر
       - name: Post-deploy URL
         run: |
           echo "Service URL:"
