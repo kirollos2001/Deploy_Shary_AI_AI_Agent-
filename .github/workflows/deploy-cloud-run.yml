@@ -113,7 +113,6 @@ jobs:
             --max-instances 4 \
             --concurrency 80 \
             --set-env-vars PORT=${{ env.PORT }},GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
-
       - name: Post-deploy URL
         run: |
           gcloud run services describe ${{ env.SERVICE_NAME }} --region ${{ env.REGION }} --format='value(status.url)'
