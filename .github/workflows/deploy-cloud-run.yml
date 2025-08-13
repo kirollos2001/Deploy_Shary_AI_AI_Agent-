@@ -1,111 +1,62 @@
-name: Deploy to Cloud Run
+name: Build and Deploy to Cloud Run
 
 on:
   push:
-    branches: [ main ]
-  workflow_dispatch:
+    branches:
+      - main
 
 env:
   REGION: us-central1
+  PROJECT_ID: shary-ai-agent
   SERVICE_NAME: ai-shary
-  REPO: ai-shary
   ARTIFACT_REPO: docker
+  REPO: ai-shary
   PORT: 5000
 
-permissions:
-  contents: read
-  id-token: write
-
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Secrets presence (safe)
-        run: |
-          echo "GCP_SERVICE_ACCOUNT_KEY: $([ -n '${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}' ] && echo YES || echo NO)"
-          echo "GCP_PROJECT_ID        : $([ -n '${{ secrets.GCP_PROJECT_ID }}' ] && echo YES || echo NO)"
-
-      - name: Resolve PROJECT_ID
-        run: |
-          if [ -n "${{ secrets.GCP_PROJECT_ID }}" ]; then
-            echo "PROJECT_ID=${{ secrets.GCP_PROJECT_ID }}" >> $GITHUB_ENV
-          else
-            echo "PROJECT_ID=${{ fromJSON(secrets.GCP_SERVICE_ACCOUNT_KEY).project_id }}" >> $GITHUB_ENV
-          fi
-          echo "PORT=${{ env.PORT }}" >> $GITHUB_ENV
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
 
-      - name: Setup gcloud
+      - name: Set up gcloud CLI
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ env.PROJECT_ID }}
 
-      - name: Who am I + gcloud state
-        run: |
-          echo "SA_EMAIL=${{ fromJSON(secrets.GCP_SERVICE_ACCOUNT_KEY).client_email }}"
-          echo "== gcloud auth list =="; gcloud auth list
-          echo "== gcloud config list =="; gcloud config list
+      # تشخيص الحساب الحالي
+      - name: Debug active account
+        run: gcloud auth list
 
-      - name: Check Artifact Registry repo exists
+      # تشخيص IAM bindings للـ repo
+      - name: Debug IAM policy for Artifact Registry repo
         run: |
-          echo "Checking repo '${{ env.ARTIFACT_REPO }}' in '${{ env.REGION }}'..."
-          if ! gcloud artifacts repositories describe "${{ env.ARTIFACT_REPO }}" --location="${{ env.REGION }}" >/dev/null 2>&1; then
-            echo "::error::Artifact Registry repository '${{ env.ARTIFACT_REPO }}' not found in '${{ env.REGION }}'. Create it first."
-            exit 1
-          fi
+          gcloud artifacts repositories get-iam-policy ${{ env.ARTIFACT_REPO }} \
+            --location=${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }} \
+            --format='table(bindings.role, bindings.members)'
 
-      - name: Docker login to Artifact Registry
-        run: |
-          gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
-          TOKEN="$(gcloud auth print-access-token)"
-          echo "$TOKEN" | docker login -u oauth2accesstoken --password-stdin "${REGION}-docker.pkg.dev"
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
-      - name: Build image (verbose)
-        env:
-          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.REPO }}:${{ github.sha }}
-        run: |
-          echo "IMAGE=$IMAGE"
-          docker build --progress=plain -t "$IMAGE" .
+      - name: Build Docker image
+        run: docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.REPO }}:${{ github.sha }} .
 
-      - name: Push image (retry once if denied)
-        env:
-          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.REPO }}:${{ github.sha }}
-        run: |
-          set -e
-          echo "Pushing $IMAGE"
-          if docker push "$IMAGE"; then
-            exit 0
-          fi
-          echo "First push failed. Re-configuring docker auth, then retrying once..."
-          gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
-          TOKEN="$(gcloud auth print-access-token)"
-          echo "$TOKEN" | docker login -u oauth2accesstoken --password-stdin "${REGION}-docker.pkg.dev"
-          docker push "$IMAGE"
+      - name: Push Docker image
+        run: docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.REPO }}:${{ github.sha }}
 
       - name: Deploy to Cloud Run
-        env:
-          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.REPO }}:${{ github.sha }}
         run: |
-          gcloud run deploy ${SERVICE_NAME} \
-            --image "$IMAGE" \
-            --region ${REGION} \
-            --platform managed \
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.REPO }}:${{ github.sha }} \
+            --region=${{ env.REGION }} \
+            --platform=managed \
             --allow-unauthenticated \
-            --port ${PORT} \
-            --memory 1Gi \
-            --cpu 1 \
-            --max-instances 4 \
-            --concurrency 80 \
-            --set-env-vars PORT=${PORT},GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
-
-      - name: Post-deploy URL
-        run: |
-          echo "Service URL:"
-          gcloud run services describe ${SERVICE_NAME} --region ${REGION} --format 'value(status.url)'
+            --port=${{ env.PORT }}
