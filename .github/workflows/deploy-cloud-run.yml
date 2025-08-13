@@ -7,11 +7,11 @@ on:
 
 env:
   REGION: us-central1
-  PROJECT_ID: shary-ai-agent          # غيّرها لو مشروعك مختلف
+  PROJECT_ID: shary-ai-agent
   SERVICE_NAME: ai-shary
   ARTIFACT_REPO: docker
   REPO: ai-shary
-  PORT: 5000                          # غيّرها لو تطبيقك بيسمع على بورت تاني
+  PORT: 5000
 
 permissions:
   contents: read
@@ -24,7 +24,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Auth باستخدام مفتاح الخدمة المخزن في سيكرت GCP_SERVICE_ACCOUNT_KEY
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -35,31 +34,12 @@ jobs:
         with:
           project_id: ${{ env.PROJECT_ID }}
 
-      # تشخيص سريع
-      - name: Debug context
-        run: |
-          echo "SA_EMAIL = ${{ fromJSON(secrets.GCP_SERVICE_ACCOUNT_KEY).client_email }}"
-          echo "PROJECT_ID = ${{ env.PROJECT_ID }}"
-          echo "REGION = ${{ env.REGION }}"
-          gcloud auth list
-          gcloud config list
-
-      # تحقق إن Artifact Registry repo موجود
-      - name: Ensure Artifact Registry repo exists
-        run: |
-          if ! gcloud artifacts repositories describe "${{ env.ARTIFACT_REPO }}" --location="${{ env.REGION }}" >/dev/null 2>&1; then
-            echo "::error::Artifact Registry repo '${{ env.ARTIFACT_REPO }}' غير موجود في region '${{ env.REGION }}'."
-            exit 1
-          fi
-
-      # Docker login إلى Artifact Registry
       - name: Docker login to Artifact Registry
         run: |
           gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
           TOKEN="$(gcloud auth print-access-token)"
           echo "$TOKEN" | docker login -u oauth2accesstoken --password-stdin "${{ env.REGION }}-docker.pkg.dev"
 
-      # Build
       - name: Build image (verbose)
         env:
           IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.REPO }}:${{ github.sha }}
@@ -67,36 +47,29 @@ jobs:
           echo "IMAGE=$IMAGE"
           docker build --progress=plain -t "$IMAGE" .
 
-      # Push (مع retry بسيط)
-      - name: Push image
+      - name: Push image (retry once)
         env:
           IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.REPO }}:${{ github.sha }}
         run: |
           set -e
           if ! docker push "$IMAGE"; then
-            echo "First push failed, retrying after re-login..."
+            echo "First push failed, re-login then retry..."
             gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
             TOKEN="$(gcloud auth print-access-token)"
             echo "$TOKEN" | docker login -u oauth2accesstoken --password-stdin "${{ env.REGION }}-docker.pkg.dev"
             docker push "$IMAGE"
           fi
 
-      # حدد حساب تشغيل Cloud Run:
-      # - لو في سيكرت RUNTIME_SA_EMAIL هنستخدمه
-      # - وإلا هنحسب الـ default compute SA
+      # Resolve runtime service account (uses default compute SA if none provided)
       - name: Resolve runtime service account
-        id: runtime-sa
         run: |
           if [ -n "${{ secrets.RUNTIME_SA_EMAIL }}" ]; then
             echo "RUNTIME_SA=${{ secrets.RUNTIME_SA_EMAIL }}" >> $GITHUB_ENV
-            echo "Using RUNTIME_SA from secret: ${{ secrets.RUNTIME_SA_EMAIL }}"
           else
             PN="$(gcloud projects describe '${{ env.PROJECT_ID }}' --format='value(projectNumber)')"
             echo "RUNTIME_SA=${PN}-compute@developer.gserviceaccount.com" >> $GITHUB_ENV
-            echo "Using default compute RUNTIME_SA: ${PN}-compute@developer.gserviceaccount.com"
           fi
 
-      # Deploy إلى Cloud Run مع تحديد الـ runtime SA وباقي الإعدادات
       - name: Deploy to Cloud Run
         env:
           IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.REPO }}:${{ github.sha }}
@@ -112,7 +85,8 @@ jobs:
             --cpu 1 \
             --max-instances 4 \
             --concurrency 80 \
-            --set-env-vars PORT=${{ env.PORT }},GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+            --set-env-vars GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+
       - name: Post-deploy URL
         run: |
           gcloud run services describe ${{ env.SERVICE_NAME }} --region ${{ env.REGION }} --format='value(status.url)'
