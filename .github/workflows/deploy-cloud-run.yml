@@ -1,0 +1,83 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  REGION: us-central1
+  SERVICE_NAME: ai-shary
+  REPO: ai-shary
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  ARTIFACT_REPO: docker
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate auth inputs
+        run: |
+          if [ -n "${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}" ] && [ -n "${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}" ]; then
+            echo "Using Workload Identity Federation auth."; exit 0;
+          fi
+          if [ -n "${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}" ]; then
+            echo "Using service account key auth."; exit 0;
+          fi
+          echo 'ERROR: Provide either (GCP_WORKLOAD_IDENTITY_PROVIDER + GCP_SERVICE_ACCOUNT_EMAIL) for WIF or GCP_SERVICE_ACCOUNT_KEY for key auth.'; exit 1
+
+      - name: Set up gcloud auth (Workload Identity Federation)
+        if: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && secrets.GCP_SERVICE_ACCOUNT_EMAIL != '' }}
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Set up gcloud auth (Service Account Key)
+        if: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER == '' && secrets.GCP_SERVICE_ACCOUNT_KEY != '' }}
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+
+      - name: Set up gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Configure Artifact Registry Docker auth
+        run: |
+          gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
+
+      - name: Build and push image
+        env:
+          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.REPO }}:${{ github.sha }}
+        run: |
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+
+      - name: Deploy to Cloud Run
+        env:
+          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.REPO }}:${{ github.sha }}
+        run: |
+          gcloud run deploy ${SERVICE_NAME} \
+            --image "$IMAGE" \
+            --region ${REGION} \
+            --platform managed \
+            --allow-unauthenticated \
+            --port 5000 \
+            --memory 1Gi \
+            --cpu 1 \
+            --max-instances 4 \
+            --concurrency 80 \
+            --set-env-vars PORT=5000,GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+
+      - name: Post-deploy URL
+        run: |
+          gcloud run services describe ${SERVICE_NAME} --region ${REGION} --format 'value(status.url)'

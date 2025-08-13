@@ -1,0 +1,44 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+env/
+.env
+.venv/
+venv/
+
+# Editors / IDE
+.vscode/
+.idea/
+
+# OS files
+*.DS_Store
+Thumbs.db
+
+# Caches
+.mypy_cache/
+.pytest_cache/
+.cache/
+
+# Local data / embeddings (rebuilt at runtime)
+chroma_db/
+
+# Logs
+*.log
+
+# Optional cache JSON (uncomment to ignore if generated)
+# units.json
+# new_launches.json
+# developers.json
+# conversations_cache.json
+# leads_cache.json
+
+# Environment files
+env
