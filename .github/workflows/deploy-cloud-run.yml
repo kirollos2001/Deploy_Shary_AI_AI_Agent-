@@ -22,45 +22,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # حدد وضع الأوثنتيكيشن من خلال السيكرتس ثم خزّنه في متغيرات بيئية
-      - name: Decide auth mode
-        id: decide-auth
+      # Debug آمن للتأكد من وجود السيكرتس (لا يطبع قيم)
+      - name: Debug secrets presence (safe)
         run: |
-          has_wif=false
-          has_key=false
+          echo "Has GCP_SERVICE_ACCOUNT_KEY? $([ -n '${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}' ] && echo YES || echo NO)"
+          echo "Has GCP_PROJECT_ID? $([ -n '${{ secrets.GCP_PROJECT_ID }}' ] && echo YES || echo NO)"
 
-          if [ -n "${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}" ] && [ -n "${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}" ]; then
-            has_wif=true
+      # جمع الإعدادات للـ env: استخدم GCP_PROJECT_ID أو استخرجه من JSON
+      - name: Collect config to env
+        run: |
+          if [ -n "${{ secrets.GCP_PROJECT_ID }}" ]; then
+            echo "PROJECT_ID=${{ secrets.GCP_PROJECT_ID }}" >> $GITHUB_ENV
+          else
+            echo "PROJECT_ID=${{ fromJSON(secrets.GCP_SERVICE_ACCOUNT_KEY).project_id }}" >> $GITHUB_ENV
           fi
+
           if [ -n "${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}" ]; then
-            has_key=true
-          fi
-
-          if [ "$has_wif" = "true" ]; then
-            echo "GCP_AUTH_MODE=wif" >> $GITHUB_ENV
-          elif [ "$has_key" = "true" ]; then
             echo "GCP_AUTH_MODE=key" >> $GITHUB_ENV
           else
             echo "GCP_AUTH_MODE=none" >> $GITHUB_ENV
           fi
 
-          # مرر الـ PROJECT_ID (لو موجود كسكرت) كمتغير بيئي
-          if [ -n "${{ secrets.GCP_PROJECT_ID }}" ]; then
-            echo "PROJECT_ID=${{ secrets.GCP_PROJECT_ID }}" >> $GITHUB_ENV
-          fi
-
       - name: Fail if no auth configured
         if: env.GCP_AUTH_MODE == 'none'
         run: |
-          echo "No GCP auth configured. Set WIF secrets or GCP_SERVICE_ACCOUNT_KEY." >&2
+          echo "No GCP auth configured. Add GCP_SERVICE_ACCOUNT_KEY (JSON) and optionally GCP_PROJECT_ID." >&2
           exit 1
-
-      - name: Auth via Workload Identity Federation
-        if: env.GCP_AUTH_MODE == 'wif'
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
 
       - name: Auth via Service Account Key
         if: env.GCP_AUTH_MODE == 'key'
