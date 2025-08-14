@@ -18,7 +18,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies first for better layer caching
-COPY requirements.txt ./
+COPY requirements.txt ./ 
 RUN python -m pip install --upgrade pip setuptools wheel \
     && pip install --no-cache-dir -r requirements.txt
 
@@ -26,12 +26,13 @@ RUN python -m pip install --upgrade pip setuptools wheel \
 COPY . .
 
 # Default runtime config
-ENV PORT=5000 \
-    GUNICORN_WORKERS=2 \
+# مفيش PORT ثابت هنا، خلي Cloud Run هو اللي يحدد
+ENV GUNICORN_WORKERS=2 \
     GUNICORN_THREADS=8 \
     GUNICORN_TIMEOUT=120
 
-EXPOSE 5000
+# بدل EXPOSE 5000، خليه 8080 أو سيبه Cloud Run يتحكم
+EXPOSE 8080
 
 # Non-root user for security
 RUN useradd -m appuser && chown -R appuser:appuser /app
@@ -39,7 +40,7 @@ USER appuser
 
 # Healthcheck hitting readiness endpoint (use portable python -c)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD ["python", "-c", "import os,sys,urllib.request,urllib.error; url='http://127.0.0.1:%s/ready' % os.environ.get('PORT','5000');\ntry:\n r=urllib.request.urlopen(url, timeout=3); sys.exit(0 if r.getcode()==200 else 1)\nexcept Exception:\n sys.exit(1)"]
+    CMD ["python", "-c", "import os,sys,urllib.request,urllib.error; port=os.environ.get('PORT','8080'); url=f'http://127.0.0.1:{port}/ready';\ntry:\n r=urllib.request.urlopen(url, timeout=3); sys.exit(0 if r.getcode()==200 else 1)\nexcept Exception:\n sys.exit(1)"]
 
 # Start with Gunicorn; the Flask app instance is `app` in `main.py`
-CMD ["sh", "-c", "gunicorn -w ${GUNICORN_WORKERS} -k gthread --threads ${GUNICORN_THREADS} --timeout ${GUNICORN_TIMEOUT} -b 0.0.0.0:${PORT} main:app"]
+CMD ["sh", "-c", "gunicorn -w ${GUNICORN_WORKERS} -k gthread --threads ${GUNICORN_THREADS} --timeout ${GUNICORN_TIMEOUT} -b 0.0.0.0:${PORT:-8080} main:app"]
