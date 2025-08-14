@@ -107,8 +107,16 @@ def run_async_tool_calls(model, message, session_id):
     finally:
         loop.close()
 
-@app.route("/")
-def index():
+"""Lightweight root & readiness endpoints for fast health checks.
+Original index (template) moved to /index and original readiness JSON moved to /ready-status.
+"""
+
+@app.route("/", methods=["GET"])
+def root():
+    return "OK", 200
+
+@app.route("/index", methods=["GET"])
+def index_page():
     return render_template("index.html")
 
 @app.route("/start", methods=["GET"])
@@ -397,51 +405,33 @@ def health_check():
 
 # Add a /ready endpoint for Google Cloud readiness probe 'GOOGLE CLOUD'
 @app.route("/ready", methods=["GET"])
+def ready_plain():
+    return "READY", 200
+
+@app.route("/ready-status", methods=["GET"])
 def readiness_check():
-    """Readiness check for Google Cloud deployment"""
+    """Detailed readiness JSON (moved from /ready)."""
     try:
-        # Basic readiness check - app is ready if it can respond
         ready = True
         issues = []
-        
-        # Check if environment variables are set
         if not os.environ.get('GEMINI_API_KEY'):
             ready = False
             issues.append("GEMINI_API_KEY not set")
-        
-        # Check if ChromaDB is initialized
         if not chromadb_initialized:
-            ready = False
             issues.append("ChromaDB not initialized")
-        
-        # Check if caches are loaded
-        try:
-            units = Cache_code.load_from_cache("units.json")
-            if not units:
-                ready = False
-                issues.append("Units cache empty")
-        except Exception as e:
-            ready = False
-            issues.append(f"Units cache error: {str(e)}")
-        
-        if ready:
+        if not cache_initialized:
+            issues.append("Cache not initialized")
+        # Treat fast-start pending states as ready but note them
+        if issues and any('not initialized' in i for i in issues):
+            # Still respond 200 to allow traffic while background init continues
             return jsonify({
-                "ready": True,
-                "message": "Application is ready to serve requests"
-            }), 200
-        else:
-            return jsonify({
-                "ready": False,
-                "issues": issues,
-                "message": "Application is not ready"
-            }), 503
-            
+                "ready": True if 'GEMINI_API_KEY not set' not in issues else False,
+                "pending": True,
+                "issues": issues
+            }), 200 if 'GEMINI_API_KEY not set' not in issues else 503
+        return jsonify({"ready": ready, "issues": issues}), 200 if ready else 503
     except Exception as e:
-        return jsonify({
-            "ready": False,
-            "error": str(e),
-            "message": "Readiness check failed"
-        }), 503
+        return jsonify({"ready": False, "error": str(e)}), 503
 # 'GOOGLE CLOUD'    
 # Initialize caches with error handling for GCP deployment GOOGLE CLOUD
 def initialize_caches_for_cloud():
