@@ -2,12 +2,13 @@
 Flask==3.0.3
 gunicorn==23.0.0
 
-# LangChain (نسخ متوافقة مع Pydantic v2)
-langchain==0.2.16
-langchain-community==0.2.16
+# LangChain stack (modern, compatible)
+langchain==0.3.10
+langchain-community==0.3.10
+langchain-core==0.3.69
 langchain-google-genai==2.1.9
 
-# Google GenAI (مدعوم مع الإصدار أعلاه)
+# Google GenAI (compatible with 2.x)
 google-generativeai==0.8.3
 
 # DB & Vectors
