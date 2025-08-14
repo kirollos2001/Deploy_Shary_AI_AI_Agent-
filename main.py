@@ -31,6 +31,7 @@ import Cache_code
 import datetime
 from session_store import save_session, get_session
 import asyncio
+import threading
 from concurrent.futures import ThreadPoolExecutor
 import variables
 from config import property_search_tool, schedule_viewing_tool, search_new_launches_tool, get_unit_details_tool, configure_gemini
@@ -473,9 +474,11 @@ def initialize_caches_for_cloud():
         logging.error(f"❌ Cache initialization failed: {e}")
         return False
 
-# Initialize caches for cloud deployment
-cache_initialized = initialize_caches_for_cloud()
-#'GOOGLE CLOUD' 
+fast_start = os.environ.get("FAST_START", "1") == "1"
+
+# Initialize caches for cloud deployment (can be deferred for fast start)
+cache_initialized = False if fast_start else initialize_caches_for_cloud()
+#'GOOGLE CLOUD'
 
 # Initialize and recreate ChromaDB collections for Google Cloud deployment
 # This ensures the app works without needing to upload ChromaDB files 'GOOGLE CLOUD'
@@ -534,14 +537,29 @@ def validate_environment_for_cloud():
 # Validate environment variables
 env_valid = validate_environment_for_cloud()
 
-# Initialize ChromaDB for cloud deployment
 chromadb_initialized = False
-if env_valid:
-    chromadb_initialized = initialize_chromadb_for_cloud()
-    if not chromadb_initialized:
-        logging.warning("⚠️ ChromaDB initialization failed, but app will continue with limited functionality")
-else:
-    logging.warning("⚠️ Skipping ChromaDB initialization due to missing environment variables")
+if not fast_start:
+    if env_valid:
+        chromadb_initialized = initialize_chromadb_for_cloud()
+        if not chromadb_initialized:
+            logging.warning("⚠️ ChromaDB initialization failed, but app will continue with limited functionality")
+    else:
+        logging.warning("⚠️ Skipping ChromaDB initialization due to missing environment variables")
+
+def _background_heavy_init():
+    global cache_initialized, chromadb_initialized
+    try:
+        logging.info("🚀 Background initialization thread started (FAST_START mode)")
+        if not cache_initialized:
+            cache_initialized = initialize_caches_for_cloud()
+        if env_valid and not chromadb_initialized:
+            chromadb_initialized = initialize_chromadb_for_cloud()
+        logging.info("✅ Background initialization completed")
+    except Exception as e:
+        logging.error(f"❌ Background initialization failed: {e}")
+
+if fast_start:
+    threading.Thread(target=_background_heavy_init, daemon=True).start()
 # 'GOOGLE CLOUD'
 # Configure scheduler with error handling for GCP deployment GOOGLE CLOUD
 def initialize_scheduler_for_cloud():
@@ -592,7 +610,7 @@ if __name__ == "__main__":
     # The app will automatically initialize ChromaDB on startup
     # No need to upload chroma_db/ directory to cloud
     try:
-        port = int(os.environ.get("PORT", 8080))  # Google Cloud sets PORT environment variable
+        port = int(os.environ.get("PORT", 8080))  # Cloud Run sets PORT (default 8080)
         logging.info(f"🚀 Starting SharyAI on port {port} for Google Cloud deployment")
         app.run(host="0.0.0.0", port=port, debug=False)
     except Exception as e:
