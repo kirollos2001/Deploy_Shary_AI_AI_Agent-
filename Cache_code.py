@@ -4,7 +4,7 @@ import logging
 
 from config import get_db_connection
 
-CACHE_DIR = "cache"
+CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
 if not os.path.exists(CACHE_DIR):
     os.makedirs(CACHE_DIR, exist_ok=True)
 
