@@ -6,7 +6,8 @@ from config import get_db_connection
 
 CACHE_DIR = "cache"
 if not os.path.exists(CACHE_DIR):
-    os.makedirs(CACHE_DIR)
+    os.makedirs(CACHE_DIR, exist_ok=True)
+
 
 def save_to_cache(filename, data):
     try:
