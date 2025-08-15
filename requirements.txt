@@ -2,12 +2,16 @@
 Flask==3.0.3
 gunicorn==23.0.0
 
-# LangChain stack (متوافقة مع إضافة Google)
+# LangChain stack (متوافق مع google-genai 0.4.1)
 langchain==0.1.20
-langchain-community==0.0.36
-# سيجلب langchain-core~=0.1.* تلقائيًا
-langchain-google-genai==0.0.11
+langchain-community==0.0.38
+langchain-core==0.1.53
+langchain-text-splitters==0.0.1
+langsmith==0.1.71
+
+# Google GenAI
 google-generativeai==0.4.1
+langchain-google-genai==0.0.11
 
 # DB & Vectors
 mysql-connector-python==9.0.0
@@ -17,12 +21,12 @@ chromadb==0.4.24
 sentence-transformers==2.2.2
 
 # Utils
-packaging==24.1
+packaging==23.2          # <- هنا التغيير
 requests==2.32.3
 loguru==0.7.2
 APScheduler==3.10.4
 python-dotenv==1.0.1
 
-# Scientific (مناسبة لـ Py3.11)
+# Scientific (Python 3.11)
 numpy==1.26.4
 pandas==2.3.1
