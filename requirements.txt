@@ -1,27 +1,29 @@
-# Core
+# Core Flask application
 Flask==3.0.3
 gunicorn==23.0.0
 
-# LangChain + Google GenAI
-langchain==0.2.16
-langchain-community==0.2.16
-langchain-google-genai==1.0.8
+# Google AI and embeddings
 google-generativeai==0.8.3
 
-# DB & Vectors
+# Database connections
 mysql-connector-python==9.0.0
+
+# Vector database for semantic search
 chromadb==0.4.24
 
-# NLP / Embeddings
-sentence-transformers==2.2.2
-
-# Utils
+# Utilities
 packaging==24.1
 requests==2.32.3
 loguru==0.7.2
 APScheduler==3.10.4
 python-dotenv==1.0.1
 
-# Scientific
+# LangChain for RAG functionality
+langchain==0.2.16
+langchain-community==0.2.16
+
+
+
+sentence-transformers==2.2.2
 numpy>=1.21.0
-pandas>=1.3.0
+pandas>=1.3.0 
